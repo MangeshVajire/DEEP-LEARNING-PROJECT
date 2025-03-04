@@ -1,0 +1,227 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torchvision
+import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import confusion_matrix, classification_report
+import seaborn as sns
+
+# Set random seed for reproducibility
+torch.manual_seed(42)
+
+# Enhanced data transformations with augmentation
+train_transform = transforms.Compose([
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(10),
+    transforms.RandomAffine(0, shear=10, scale=(0.8, 1.2)),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
+
+test_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+])
+
+# Load CIFAR-10 dataset with augmentation
+trainset = torchvision.datasets.CIFAR10(root='./data', train=True,
+                                      download=True, transform=train_transform)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=128,
+                                        shuffle=True, num_workers=2)
+
+testset = torchvision.datasets.CIFAR10(root='./data', train=False,
+                                     download=True, transform=test_transform)
+testloader = torch.utils.data.DataLoader(testset, batch_size=128,
+                                       shuffle=False, num_workers=2)
+
+classes = ('plane', 'car', 'bird', 'cat', 'deer',
+           'dog', 'frog', 'horse', 'ship', 'truck')
+
+# Improved CNN Model with Batch Normalization
+class ImprovedNet(nn.Module):
+    def __init__(self):
+        super(ImprovedNet, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.conv2 = nn.Conv2d(64, 128, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(128)
+        self.conv3 = nn.Conv2d(128, 256, 3, padding=1)
+        self.bn3 = nn.BatchNorm2d(256)
+        
+        self.pool = nn.MaxPool2d(2, 2)
+        self.dropout = nn.Dropout(0.3)
+        
+        self.fc1 = nn.Linear(256 * 4 * 4, 512)
+        self.bn4 = nn.BatchNorm1d(512)
+        self.fc2 = nn.Linear(512, 128)
+        self.bn5 = nn.BatchNorm1d(128)
+        self.fc3 = nn.Linear(128, 10)
+
+    def forward(self, x):
+        x = self.pool(torch.relu(self.bn1(self.conv1(x))))
+        x = self.pool(torch.relu(self.bn2(self.conv2(x))))
+        x = self.pool(torch.relu(self.bn3(self.conv3(x))))
+        x = x.view(-1, 256 * 4 * 4)
+        x = self.dropout(torch.relu(self.bn4(self.fc1(x))))
+        x = self.dropout(torch.relu(self.bn5(self.fc2(x))))
+        x = self.fc3(x)
+        return x
+
+# Initialize model, loss function, and optimizer
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+net = ImprovedNet().to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.AdamW(net.parameters(), lr=0.001, weight_decay=0.01)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
+
+def train_model(epochs):
+    train_losses = []
+    train_accs = []
+    val_losses = []
+    val_accs = []
+    best_val_acc = 0
+    
+    for epoch in range(epochs):
+        # Training phase
+        net.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for data in trainloader:
+            inputs, labels = data[0].to(device), data[1].to(device)
+            optimizer.zero_grad()
+            outputs = net(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            running_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+        
+        train_loss = running_loss / len(trainloader)
+        train_acc = 100 * correct / total
+        train_losses.append(train_loss)
+        train_accs.append(train_acc)
+        
+        # Validation phase
+        val_loss, val_acc = evaluate_model()
+        val_losses.append(val_loss)
+        val_accs.append(val_acc)
+        
+        # Learning rate scheduling
+        scheduler.step(val_loss)
+        
+        # Save best model
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            torch.save(net.state_dict(), 'best_model.pth')
+        
+        print(f'Epoch {epoch + 1}')
+        print(f'Training - Loss: {train_loss:.3f}, Accuracy: {train_acc:.2f}%')
+        print(f'Validation - Loss: {val_loss:.3f}, Accuracy: {val_acc:.2f}%\n')
+    
+    return train_losses, train_accs, val_losses, val_accs
+
+def evaluate_model():
+    net.eval()
+    correct = 0
+    total = 0
+    running_loss = 0.0
+    all_preds = []
+    all_labels = []
+    
+    with torch.no_grad():
+        for data in testloader:
+            images, labels = data[0].to(device), data[1].to(device)
+            outputs = net(images)
+            loss = criterion(outputs, labels)
+            running_loss += loss.item()
+            
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+    
+    test_loss = running_loss / len(testloader)
+    accuracy = 100 * correct / total
+    
+    return test_loss, accuracy
+
+def plot_training_history(train_losses, train_accs, val_losses, val_accs):
+    plt.figure(figsize=(15, 5))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(train_losses, label='Training Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.title('Loss History')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(train_accs, label='Training Accuracy')
+    plt.plot(val_accs, label='Validation Accuracy')
+    plt.title('Accuracy History')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy (%)')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig('training_history_improved.png')
+    plt.close()
+
+def plot_confusion_matrix(y_true, y_pred):
+    cm = confusion_matrix(y_true, y_pred)
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=classes, yticklabels=classes)
+    plt.title('Confusion Matrix')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.tight_layout()
+    plt.savefig('confusion_matrix_improved.png')
+    plt.close()
+
+# Main execution
+if __name__ == '__main__':
+    print("Training the improved model...")
+    train_losses, train_accs, val_losses, val_accs = train_model(epochs=20)
+    
+    # Load best model for evaluation
+    net.load_state_dict(torch.load('best_model.pth'))
+    
+    print("\nEvaluating the model...")
+    final_loss, final_acc = evaluate_model()
+    print(f'Final Test Accuracy: {final_acc:.2f}%')
+    
+    # Generate visualizations
+    print("\nGenerating visualizations...")
+    plot_training_history(train_losses, train_accs, val_losses, val_accs)
+    
+    # Get predictions for confusion matrix
+    net.eval()
+    all_preds = []
+    all_labels = []
+    with torch.no_grad():
+        for data in testloader:
+            images, labels = data[0].to(device), data[1].to(device)
+            outputs = net(images)
+            _, predicted = torch.max(outputs.data, 1)
+            all_preds.extend(predicted.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+    
+    plot_confusion_matrix(all_labels, all_preds)
+    
+    # Print classification report
+    print("\nClassification Report:")
+    print(classification_report(all_labels, all_preds, target_names=classes))
+    
+    print("\nTraining completed! Check 'training_history_improved.png' and 'confusion_matrix_improved.png' for visualizations.")
