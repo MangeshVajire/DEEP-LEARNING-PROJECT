@@ -53,3 +53,5 @@ This data science project consists of several key components:
 - Provides detailed resource utilization analysis
 The project demonstrates a comprehensive understanding of machine learning, deep learning, data preprocessing, and optimization techniques, with well-structured code and proper visualization capabilities.
 
+![Image](https://github.com/user-attachments/assets/ce103fbb-f445-49f5-b9d6-9be45f1b5a55)
+
